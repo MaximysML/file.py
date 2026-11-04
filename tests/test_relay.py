@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from bot_relay import Settings, parse_request, positive_id, request_text, response_text
+from bot_relay import Settings, outgoing_request, parse_request, positive_id, request_text, response_text
 
 
 class RelayTests(unittest.TestCase):
@@ -13,6 +13,14 @@ class RelayTests(unittest.TestCase):
     def test_prompt(self):
         self.assertEqual(request_text(Settings(), 'текст'), 'текст')
         self.assertEqual(request_text(Settings(prompt='Кратко'), 'текст'), 'Кратко\n\nтекст')
+
+    def test_outgoing_commands(self):
+        self.assertEqual(outgoing_request(Settings(), 'think', 'задача'), '/think задача')
+        self.assertEqual(outgoing_request(Settings(), 'ask', 'вопрос'), '/ask вопрос')
+        self.assertEqual(outgoing_request(Settings(prompt='Кратко'), 'think', 'задача'),
+                         '/think Кратко\n\nзадача')
+        with self.assertRaises(ValueError):
+            outgoing_request(Settings(), 'quit', 'текст')
 
     def test_id(self):
         self.assertEqual(positive_id('123'), 123)

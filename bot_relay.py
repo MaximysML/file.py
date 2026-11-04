@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-import getpass
 import os
 from dataclasses import dataclass
 
 HELP = """Команды консоли:
-/ask ТЕКСТ       — отправить обычный запрос выбранному боту.
-/think ТЕКСТ     — отправить запрос, пометить публичный ответ как «ДУМАЕТ»,
+/ask ТЕКСТ       — бот отправит текстовую команду /ask выбранному боту.
+/think ТЕКСТ     — бот отправит /think, пометит публичный ответ как «ДУМАЕТ»,
                    затем отправлять «продолжай» (в пределах /rounds).
 /rounds N        — число автоматических продолжений для /think (0–10).
 /continue ТЕКСТ  — изменить текст автоматического продолжения.
@@ -44,6 +43,13 @@ def request_text(settings: Settings, text: str) -> str:
     return f"{settings.prompt}\n\n{text}" if settings.prompt else text
 
 
+def outgoing_request(settings: Settings, command: str, text: str) -> str:
+    """Keep the target bot's textual command before the optional instruction."""
+    if command not in ("ask", "think"):
+        raise ValueError("Допустимы только /ask и /think")
+    return f"/{command} {request_text(settings, text)}"
+
+
 def response_text(message) -> str:
     parts = [message.content] if message.content else []
     for embed in message.embeds:
@@ -71,17 +77,31 @@ def positive_id(value: str) -> int:
 def main() -> None:
     try:
         import discord
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.text import Text
     except ImportError:
         raise SystemExit("Установите зависимости: python -m pip install -r requirements.txt")
 
-    token = os.getenv("DISCORD_BOT_TOKEN") or getpass.getpass("Токен БОТА (ввод скрыт): ")
+    terminal = Console()
+
+    def print(message="", **kwargs):
+        # Treat bot replies and errors as plain text, never terminal markup.
+        terminal.print(Text(str(message)))
+
+    def panel(text, title, color="cyan"):
+        terminal.print(Panel(Text(str(text)), title=Text(title), border_style=color))
+
+    panel("DISCORD  /  BOT RELAY\nТекстовые команды • ответы • продолжения", "RELAY CONSOLE", "bright_magenta")
+    print("Внимание: токен при вводе виден на экране. Не показывайте окно другим.")
+    token = os.getenv("DISCORD_BOT_TOKEN") or terminal.input("Токен БОТА (видимый ввод): ")
     if not token.strip():
         raise SystemExit("Токен не указан.")
     try:
-        channel_id = positive_id(input("ID текстового канала: ").strip())
+        channel_id = positive_id(terminal.input("ID текстового канала: ").strip())
     except ValueError:
         raise SystemExit("Некорректный ID канала.")
-    target = input("ID или точное имя другого бота: ").strip()
+    target = terminal.input("ID или точное имя другого бота: ").strip()
     if not target:
         raise SystemExit("Укажите бота.")
 
@@ -137,17 +157,17 @@ def main() -> None:
             target_bot = matches[0]
         if not target_bot.bot or target_bot.id == client.user.id:
             raise ValueError("Выберите другого бота, а не себя или пользователя.")
-        print(f"Подключено: {client.user}. Канал: #{channel.name}. Бот: {target_bot}.")
+        panel(f"Аккаунт: {client.user}\nКанал: #{channel.name}\nЦелевой бот: {target_bot}", "ПОДКЛЮЧЕНО", "green")
         print("Не запускайте встречные реле. Работайте только в разрешённом канале.")
-        print(HELP)
+        panel(HELP, "КОМАНДЫ")
         while not client.is_closed():
-            command, value = parse_request(await console("> "))
+            command, value = parse_request(await console("relay › "))
             if not command:
                 continue
             if command == "quit":
                 return
             if command == "help":
-                print(HELP)
+                panel(HELP, "КОМАНДЫ")
             elif command == "rounds":
                 try:
                     number = int(value)
@@ -171,16 +191,18 @@ def main() -> None:
                     print("После команды нужен текст запроса.")
                     continue
                 try:
-                    text = request_text(settings, value)
+                    text = outgoing_request(settings, command, value)
                     count = settings.rounds if command == "think" else 0
                     for turn in range(count + 1):
                         if turn:
                             await asyncio.sleep(2)
                             text = settings.continuation
                             print(f"[ПРОДОЛЖЕНИЕ {turn}/{count}] {text}")
-                        answer = await exchange(channel, target_bot, text)
+                        panel(text, "БОТ → DISCORD", "blue")
+                        with terminal.status("Ожидаем ответ выбранного бота…", spinner="dots"):
+                            answer = await exchange(channel, target_bot, text)
                         label = "ДУМАЕТ · публичный ответ" if command == "think" else "ОТВЕТ"
-                        print(f"[{label}]\n{response_text(answer)}", flush=True)
+                        panel(response_text(answer), label, "yellow" if command == "think" else "green")
                 except asyncio.TimeoutError:
                     print("Ответ не получен за 90 секунд. Цепочка остановлена. Бот может игнорировать других ботов.")
                 except (discord.HTTPException, ValueError) as error:
