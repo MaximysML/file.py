@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import os
 from dataclasses import dataclass
 
@@ -83,6 +84,13 @@ def main() -> None:
     except ImportError:
         raise SystemExit("Установите зависимости: python -m pip install -r requirements.txt")
 
+    parser = argparse.ArgumentParser(description="Discord console / OpenAI-compatible proxy")
+    parser.add_argument("--server", action="store_true", help="Запустить API вместо консоли")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+    if args.server and not os.getenv("RELAY_API_KEY"):
+        raise SystemExit("Задайте RELAY_API_KEY для защиты API.")
     terminal = Console()
 
     def print(message="", **kwargs):
@@ -159,6 +167,24 @@ def main() -> None:
             raise ValueError("Выберите другого бота, а не себя или пользователя.")
         panel(f"Аккаунт: {client.user}\nКанал: #{channel.name}\nЦелевой бот: {target_bot}", "ПОДКЛЮЧЕНО", "green")
         print("Не запускайте встречные реле. Работайте только в разрешённом канале.")
+        if args.server:
+            from aiohttp import web
+            from proxy_server import create_app
+
+            async def proxy_exchange(prompt):
+                panel("Получен API-запрос", "API → DISCORD", "blue")
+                answer = await exchange(channel, target_bot, prompt)
+                return response_text(answer)
+
+            runner = web.AppRunner(create_app(proxy_exchange, os.environ["RELAY_API_KEY"]))
+            await runner.setup()
+            try:
+                await web.TCPSite(runner, args.host, args.port).start()
+                panel(f"Адрес: http://{args.host}:{args.port}/v1\nМодель: discord-relay\nАвторизация: Bearer RELAY_API_KEY\nCtrl+C — остановить", "API СЕРВЕР", "green")
+                await asyncio.Event().wait()
+            finally:
+                await runner.cleanup()
+            return
         panel(HELP, "КОМАНДЫ")
         while not client.is_closed():
             command, value = parse_request(await console("relay › "))
