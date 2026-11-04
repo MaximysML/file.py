@@ -1,2 +1,4 @@
 discord.py>=2.4,<3
 rich>=13.7,<15
+
+aiohttp>=3.10,<4
